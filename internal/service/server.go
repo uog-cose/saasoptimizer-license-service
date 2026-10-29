@@ -75,28 +75,34 @@ func (server *Server) handleHealth(writer http.ResponseWriter, request *http.Req
 func (server *Server) handleOperation(expected protocol.Operation, writer http.ResponseWriter, request *http.Request) {
 	requestID := strings.TrimSpace(request.Header.Get("X-Request-ID"))
 	operationID := strings.TrimSpace(request.Header.Get("X-Operation-ID"))
+	respondError := func(version string, code protocol.ErrorCode, retryable bool, message string, status int) {
+		server.logRequest(string(expected), requestID, operationID, status, code)
+		writeProtocolError(writer, version, requestID, operationID, code, retryable, message, status)
+	}
 	if request.Method != http.MethodPost {
-		writeProtocolError(writer, server.responseVersion(), requestID, operationID, protocol.ErrorInvalidRequest, false, "method not allowed", http.StatusMethodNotAllowed)
+		respondError(server.responseVersion(), protocol.ErrorInvalidRequest, false, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if !server.authorized(request) {
-		writeProtocolError(writer, server.responseVersion(), requestID, operationID, protocol.ErrorAuthenticationFailed, false, "service authentication failed", http.StatusUnauthorized)
+		respondError(server.responseVersion(), protocol.ErrorAuthenticationFailed, false, "service authentication failed", http.StatusUnauthorized)
 		return
 	}
 	decoder := json.NewDecoder(io.LimitReader(request.Body, maxRequestBodyBytes+1))
 	var envelope protocol.Request
 	if err := decoder.Decode(&envelope); err != nil {
-		writeProtocolError(writer, server.responseVersion(), requestID, operationID, protocol.ErrorInvalidRequest, false, "invalid request envelope", http.StatusBadRequest)
+		respondError(server.responseVersion(), protocol.ErrorInvalidRequest, false, "invalid request envelope", http.StatusBadRequest)
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		writeProtocolError(writer, server.responseVersion(), envelope.RequestID, envelope.OperationID, protocol.ErrorInvalidRequest, false, "request body is too large or contains trailing data", http.StatusBadRequest)
+		requestID = envelope.RequestID
+		operationID = envelope.OperationID
+		respondError(server.responseVersion(), protocol.ErrorInvalidRequest, false, "request body is too large or contains trailing data", http.StatusBadRequest)
 		return
 	}
 	requestID = envelope.RequestID
 	operationID = envelope.OperationID
 	if envelope.Operation != expected {
-		writeProtocolError(writer, server.responseVersion(), requestID, operationID, protocol.ErrorInvalidRequest, false, "operation does not match endpoint", http.StatusBadRequest)
+		respondError(server.responseVersion(), protocol.ErrorInvalidRequest, false, "operation does not match endpoint", http.StatusBadRequest)
 		return
 	}
 	if err := envelope.Validate(); err != nil {
@@ -106,11 +112,11 @@ func (server *Server) handleOperation(expected protocol.Operation, writer http.R
 			code = protocol.ErrorProtocolIncompatible
 			status = http.StatusConflict
 		}
-		writeProtocolError(writer, server.responseVersion(), requestID, operationID, code, false, "request is not compatible", status)
+		respondError(server.responseVersion(), code, false, "request is not compatible", status)
 		return
 	}
 	if server.config.Scenario == scenario.KindProtocolMismatch {
-		writeProtocolError(writer, "v0", requestID, operationID, protocol.ErrorProtocolIncompatible, false, "protocol version is not supported", http.StatusConflict)
+		respondError("v0", protocol.ErrorProtocolIncompatible, false, "protocol version is not supported", http.StatusConflict)
 		return
 	}
 	if !server.waitForScenario(request.Context()) {
@@ -118,9 +124,10 @@ func (server *Server) handleOperation(expected protocol.Operation, writer http.R
 	}
 	response, status, code, retryable, message := server.execute(envelope)
 	if code != "" {
-		writeProtocolError(writer, server.responseVersion(), requestID, operationID, code, retryable, message, status)
+		respondError(server.responseVersion(), code, retryable, message, status)
 		return
 	}
+	server.logRequest(string(envelope.Operation), requestID, operationID, status, "")
 	writeJSON(writer, status, response)
 }
 
@@ -143,6 +150,11 @@ func (server *Server) responseVersion() string {
 		return protocol.Version
 	}
 	return server.config.ResponseProtocolVersion
+}
+
+// logRequest records bounded operational metadata without request secrets.
+func (server *Server) logRequest(operation, requestID, operationID string, status int, code protocol.ErrorCode) {
+	server.logger.Info("license request completed", "event", "license_request", "operation", operation, "request_id", requestID, "operation_id", operationID, "scenario", string(server.config.Scenario), "status", status, "error_code", string(code))
 }
 
 // waitForScenario applies deterministic delay and stops cleanly on request

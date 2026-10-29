@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -241,5 +243,36 @@ func TestTimeoutScenarioHonorsClientCancellation(t *testing.T) {
 	server.Handler().ServeHTTP(recorder, httpRequest)
 	if recorder.Body.Len() != 0 {
 		t.Fatalf("body=%s, want no response after cancellation", recorder.Body.String())
+	}
+}
+
+// TestServiceLogsDoNotContainSecrets verifies operational logs contain only
+// safe correlation and outcome fields.
+func TestServiceLogsDoNotContainSecrets(t *testing.T) {
+	config := scenario.DefaultConfig()
+	config.AuthToken = "secret-service-token"
+	fixtureStore, err := store.NewMemoryStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	server, err := New(config, fixtureStore, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "secret-license-key", UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpRequest := httptest.NewRequest(http.MethodPost, "/v1/licenses/activate", bytes.NewReader(payload))
+	httpRequest.Header.Set("Authorization", "Bearer secret-service-token")
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httpRequest)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(logs.String(), "secret-service-token") || strings.Contains(logs.String(), "secret-license-key") || !strings.Contains(logs.String(), "license_request") {
+		t.Fatalf("unsafe or missing logs=%s", logs.String())
 	}
 }
