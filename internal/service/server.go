@@ -2,6 +2,7 @@
 package service
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/uog-cose/saasoptimizer-license-service/internal/protocol"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/scenario"
@@ -111,7 +113,15 @@ func (server *Server) handleOperation(expected protocol.Operation, writer http.R
 		writeProtocolError(writer, "v0", requestID, operationID, protocol.ErrorProtocolIncompatible, false, "protocol version is not supported", http.StatusConflict)
 		return
 	}
-	writeProtocolError(writer, server.responseVersion(), requestID, operationID, protocol.ErrorInternal, false, errOperationNotReady.Error(), http.StatusNotImplemented)
+	if !server.waitForScenario(request.Context()) {
+		return
+	}
+	response, status, code, retryable, message := server.execute(envelope)
+	if code != "" {
+		writeProtocolError(writer, server.responseVersion(), requestID, operationID, code, retryable, message, status)
+		return
+	}
+	writeJSON(writer, status, response)
 }
 
 // authorized verifies the configured service bearer token in constant time.
@@ -133,6 +143,90 @@ func (server *Server) responseVersion() string {
 		return protocol.Version
 	}
 	return server.config.ResponseProtocolVersion
+}
+
+// waitForScenario applies deterministic delay and stops cleanly on request
+// cancellation so timeout tests do not leak goroutines.
+func (server *Server) waitForScenario(ctx context.Context) bool {
+	if server.config.Scenario != scenario.KindTimeout || server.config.Delay <= 0 {
+		return true
+	}
+	timer := time.NewTimer(server.config.Delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		server.logger.Debug("license scenario request canceled", "event", "request_canceled")
+		return false
+	}
+}
+
+// execute evaluates one validated request against the configured scenario.
+func (server *Server) execute(request protocol.Request) (protocol.Response, int, protocol.ErrorCode, bool, string) {
+	base := protocol.Response{ProtocolVersion: server.responseVersion(), RequestID: request.RequestID, OperationID: request.OperationID}
+	if server.config.Scenario == scenario.KindUnavailable {
+		status := server.config.FaultStatus
+		if status == 0 {
+			status = http.StatusServiceUnavailable
+		}
+		return base, status, protocol.ErrorUnavailable, true, "development license service is unavailable"
+	}
+	if server.config.Scenario == scenario.KindDeny && request.Operation != protocol.OperationDeactivate {
+		return base, http.StatusForbidden, protocol.ErrorInvalidLicense, false, "development license is denied"
+	}
+	if server.config.Scenario == scenario.KindQuotaExceeded && request.Operation != protocol.OperationDeactivate {
+		return base, http.StatusForbidden, protocol.ErrorQuotaExceeded, false, "development license quota is exceeded"
+	}
+	if server.config.Scenario == scenario.KindRevoked && request.Operation != protocol.OperationDeactivate {
+		return base, http.StatusForbidden, protocol.ErrorLicenseRevoked, false, "development license is revoked"
+	}
+	if server.config.Scenario == scenario.KindExpired && request.Operation == protocol.OperationActivate {
+		return base, http.StatusForbidden, protocol.ErrorLicenseExpired, false, "development license is expired"
+	}
+	switch request.Operation {
+	case protocol.OperationValidate, protocol.OperationRefresh:
+		grant := server.store.Grant()
+		base.Grant = &grant
+		return base, http.StatusOK, "", false, ""
+	case protocol.OperationActivate:
+		activation, err := server.store.Activate(request.IdempotencyKey, *request.Activation)
+		if err != nil {
+			return base, storeErrorStatus(err), storeErrorCode(err), false, "activation request cannot be applied"
+		}
+		base.Activation = &activation
+		return base, http.StatusOK, "", false, ""
+	case protocol.OperationDeactivate:
+		if err := server.store.Deactivate(request.IdempotencyKey, *request.Deactivation); err != nil {
+			return base, storeErrorStatus(err), storeErrorCode(err), false, "deactivation request cannot be applied"
+		}
+		base.Accepted = true
+		return base, http.StatusOK, "", false, ""
+	default:
+		return base, http.StatusNotImplemented, protocol.ErrorInternal, false, errOperationNotReady.Error()
+	}
+}
+
+// storeErrorCode maps ephemeral store failures to protocol errors.
+func storeErrorCode(err error) protocol.ErrorCode {
+	if errors.Is(err, store.ErrIdempotencyConflict) {
+		return protocol.ErrorConflict
+	}
+	if errors.Is(err, store.ErrCapacityExceeded) {
+		return protocol.ErrorQuotaExceeded
+	}
+	return protocol.ErrorInternal
+}
+
+// storeErrorStatus maps ephemeral store failures to HTTP status classes.
+func storeErrorStatus(err error) int {
+	if errors.Is(err, store.ErrIdempotencyConflict) {
+		return http.StatusConflict
+	}
+	if errors.Is(err, store.ErrCapacityExceeded) {
+		return http.StatusForbidden
+	}
+	return http.StatusInternalServerError
 }
 
 // writeJSON writes one bounded JSON response with a stable content type.
