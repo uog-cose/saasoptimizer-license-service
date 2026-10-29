@@ -47,3 +47,20 @@ curl http://127.0.0.1:55154/v1/health
 
 License operations require the configured bearer token. The fixture store is
 ephemeral and process-local; do not use this service for production licensing.
+
+## Container development
+
+The image is intentionally non-production: it contains the development
+fixtures, runs as an unprivileged user, and keeps activation state in memory.
+Docker and rootless Podman use the same image definition:
+
+```bash
+docker build -t saasoptimizer-license-service:dev .
+docker run --rm --name saasoptimizer-license-service \
+  -e LICENSE_SERVICE_TOKEN=development-token \
+  -p 55154:55154 \
+  saasoptimizer-license-service:dev
+```
+
+With Podman, replace `docker` with `podman`; the service does not require
+privileged container features.
