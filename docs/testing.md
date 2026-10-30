@@ -18,7 +18,33 @@ GOWORK=off go build ./cmd/license-service
 The test suite covers the v1 envelope, authentication, idempotent activation,
 health readiness, success responses, explicit denials, expiry, revocation,
 quota, temporary unavailability, timeout cancellation, protocol mismatch, and
-secret-free logging.
+secret-free logging. The PostgreSQL repository contract test is opt-in so the
+fast suite remains independent of external services.
+
+## Durable activation test
+
+Start a disposable PostgreSQL instance and run the repository contract test:
+
+```bash
+export LICENSE_SERVICE_POSTGRES_URL='postgres://user:password@127.0.0.1:5432/license_service?sslmode=disable'
+export LICENSE_SERVICE_KEY_PROTECTION_SECRET='development-protection-secret'
+GOWORK=off go test ./internal/activation/postgres -run TestStore -v
+```
+
+The test creates an activation, closes the connection pool, opens a new pool,
+and verifies that the same activation can be read without storing the raw
+license key. The runtime applies the same migration during startup:
+
+```bash
+LICENSE_SERVICE_STORAGE_MODE=postgres \
+LICENSE_SERVICE_POSTGRES_URL="$LICENSE_SERVICE_POSTGRES_URL" \
+LICENSE_SERVICE_KEY_PROTECTION_SECRET="$LICENSE_SERVICE_KEY_PROTECTION_SECRET" \
+LICENSE_SERVICE_TOKEN=development-token \
+GOWORK=off go run ./cmd/license-service
+```
+
+Use `LICENSE_SERVICE_STORAGE_MODE=memory` for isolated unit tests. Do not use
+the in-memory mode as evidence that activation survives a process restart.
 
 ## Local service check
 
