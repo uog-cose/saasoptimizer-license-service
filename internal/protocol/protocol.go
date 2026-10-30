@@ -372,4 +372,20 @@ type HealthResponse struct {
 	Environment string `json:"environment"`
 	// ProtocolVersion identifies the supported contract.
 	ProtocolVersion string `json:"protocol_version"`
+	// CheckType identifies whether the response is liveness or readiness.
+	CheckType string `json:"check_type,omitempty"`
+	// Dependencies reports bounded dependency state without secret details.
+	Dependencies []HealthDependency `json:"dependencies,omitempty"`
+}
+
+// HealthDependency describes one required or optional service dependency.
+type HealthDependency struct {
+	// Name identifies the dependency using a stable low-cardinality name.
+	Name string `json:"name"`
+	// Status reports the dependency state.
+	Status string `json:"status"`
+	// Required reports whether failure blocks readiness.
+	Required bool `json:"required"`
+	// Detail is a bounded, non-secret diagnostic.
+	Detail string `json:"detail,omitempty"`
 }

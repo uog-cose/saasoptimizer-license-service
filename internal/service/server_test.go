@@ -81,7 +81,32 @@ func TestHealthEndpointReportsDevelopmentBoundary(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Status != "ok" || response.Environment != "development" || response.ProtocolVersion != protocol.Version {
+	if response.Status != "ok" || response.Environment != "development" || response.ProtocolVersion != protocol.Version || response.CheckType != "liveness" {
+		t.Fatalf("response=%+v", response)
+	}
+}
+
+// TestHealthEndpointsSeparateLivenessAndReadiness verifies public service probes.
+func TestHealthEndpointsSeparateLivenessAndReadiness(t *testing.T) {
+	server := testHTTPServer(t)
+	request := httptest.NewRequest(http.MethodGet, "/v1/health/live", nil)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("liveness status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/v1/health/ready", nil)
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("readiness status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response protocol.HealthResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.CheckType != "readiness" || response.Status != "ok" || len(response.Dependencies) != 1 || response.Dependencies[0].Name != "activation-store" {
 		t.Fatalf("response=%+v", response)
 	}
 }
