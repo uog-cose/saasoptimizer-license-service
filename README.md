@@ -14,9 +14,11 @@ and must never receive production license keys or customer data.
 Server -> license-adapter Remote Provider -> license-service
 ```
 
-The service owns only development scenario evaluation and ephemeral test
-activation state. Production activation persistence, billing, key issuance,
-and customer administration are outside this repository.
+The service owns development scenario evaluation and the activation persistence
+boundary used by the non-production deployment. Production billing, key
+issuance, and customer administration are outside this repository. Memory mode
+remains the default for fast unit tests; PostgreSQL mode is required when an
+activation must survive a service restart.
 
 ## Local development
 
@@ -38,6 +40,9 @@ are:
 | `LICENSE_SERVICE_FAULT_STATUS` | `503` | HTTP status for unavailable scenarios |
 | `LICENSE_SERVICE_LICENSE_ID` | `dev-license-001` | Fixture license identifier |
 | `LICENSE_SERVICE_PRODUCT_ID` | `saasoptimizer` | Fixture product identifier |
+| `LICENSE_SERVICE_STORAGE_MODE` | `memory` | `memory` for fixtures or `postgres` for durable activations |
+| `LICENSE_SERVICE_POSTGRES_URL` | empty | PostgreSQL DSN required in `postgres` mode |
+| `LICENSE_SERVICE_KEY_PROTECTION_SECRET` | empty | Secret of at least 16 bytes used to protect stored key references |
 
 Health is public for container orchestration:
 
@@ -45,19 +50,27 @@ Health is public for container orchestration:
 curl http://127.0.0.1:55154/v1/health
 ```
 
-License operations require the configured bearer token. The fixture store is
-ephemeral and process-local; do not use this service for production licensing.
+License operations require the configured bearer token. Memory-mode activation
+state is ephemeral and process-local. PostgreSQL mode applies the embedded
+activation migration and stores only protected key references, never raw
+license keys. Keep the protection secret in the deployment secret store and
+reuse it across restarts. Do not use this development service for production
+licensing.
 
 ## Container development
 
 The image is intentionally non-production: it contains the development
-fixtures, runs as an unprivileged user, and keeps activation state in memory.
-Docker and rootless Podman use the same image definition:
+fixtures and runs as an unprivileged user. It defaults to in-memory activation
+state. Docker and rootless Podman use the same image definition. To exercise
+restart persistence, provide PostgreSQL and configure the storage variables:
 
 ```bash
 docker build -t saasoptimizer-license-service:dev .
 docker run --rm --name saasoptimizer-license-service \
   -e LICENSE_SERVICE_TOKEN=development-token \
+  -e LICENSE_SERVICE_STORAGE_MODE=postgres \
+  -e LICENSE_SERVICE_POSTGRES_URL='postgres://user:password@host:5432/license_service?sslmode=disable' \
+  -e LICENSE_SERVICE_KEY_PROTECTION_SECRET='development-protection-secret' \
   -p 55154:55154 \
   saasoptimizer-license-service:dev
 ```

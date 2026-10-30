@@ -12,9 +12,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/uog-cose/saasoptimizer-license-service/internal/activation"
+	activationpostgres "github.com/uog-cose/saasoptimizer-license-service/internal/activation/postgres"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/scenario"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/service"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/store"
+	"github.com/uog-cose/saasoptimizer-license-service/migrations"
 )
 
 // main starts the configured non-production License Service and exits with a
@@ -38,7 +42,12 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create scenario store: %w", err)
 	}
-	application, err := service.New(config, fixtureStore, logger)
+	activationStore, closeStore, err := openActivationStore(config)
+	if err != nil {
+		return fmt.Errorf("open activation store: %w", err)
+	}
+	defer closeStore()
+	application, err := service.NewWithActivationStore(config, fixtureStore, activationStore, nil, logger)
 	if err != nil {
 		return fmt.Errorf("create HTTP service: %w", err)
 	}
@@ -49,7 +58,7 @@ func run() error {
 	go func() {
 		serverErrors <- httpServer.ListenAndServe()
 	}()
-	logger.Info("development license service listening", "event", "service_start", "service", "saasoptimizer-license-service", "environment", "development", "address", config.Address, "scenario", string(config.Scenario), "protocol_version", config.ResponseProtocolVersion)
+	logger.Info("development license service listening", "event", "service_start", "service", "saasoptimizer-license-service", "environment", "development", "address", config.Address, "scenario", string(config.Scenario), "storage_mode", string(config.StorageMode), "protocol_version", config.ResponseProtocolVersion)
 	select {
 	case err := <-serverErrors:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -64,4 +73,32 @@ func run() error {
 		}
 		return nil
 	}
+}
+
+// openActivationStore creates the configured activation backend and returns a
+// cleanup function for resources owned by the command.
+func openActivationStore(config scenario.Config) (activation.Store, func(), error) {
+	if config.StorageMode == scenario.StorageModeMemory {
+		return activation.NewMemoryActivationStore(), func() {}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, config.PostgresURL)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, func() {}, fmt.Errorf("ping PostgreSQL: %w", err)
+	}
+	if err := migrations.Apply(ctx, pool); err != nil {
+		pool.Close()
+		return nil, func() {}, err
+	}
+	activationStore, err := activationpostgres.New(pool)
+	if err != nil {
+		pool.Close()
+		return nil, func() {}, err
+	}
+	return activationStore, pool.Close, nil
 }

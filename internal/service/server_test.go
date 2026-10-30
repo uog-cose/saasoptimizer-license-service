@@ -134,6 +134,34 @@ func TestAllowScenarioServesValidationAndActivation(t *testing.T) {
 	}
 }
 
+// TestActivationUsesStableDurableRecordSemantics verifies duplicate requests
+// reuse one activation ID while returning a replay result.
+func TestActivationUsesStableDurableRecordSemantics(t *testing.T) {
+	server := testHTTPServer(t)
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	status, first := sendLicenseRequest(t, server, "/v1/licenses/activate", request)
+	if status != http.StatusOK || first.Activation == nil || !first.Activation.IsNew {
+		t.Fatalf("status=%d response=%+v", status, first)
+	}
+	request.RequestID = "request-2"
+	request.OperationID = "operation-2"
+	status, second := sendLicenseRequest(t, server, "/v1/licenses/activate", request)
+	if status != http.StatusOK || second.Activation == nil || second.Activation.IsNew || second.Activation.ActivationID != first.Activation.ActivationID {
+		t.Fatalf("status=%d first=%+v second=%+v", status, first, second)
+	}
+}
+
+// TestActivationRejectsUnexpectedProduct verifies activation cannot bind a
+// configured license to another product.
+func TestActivationRejectsUnexpectedProduct(t *testing.T) {
+	server := testHTTPServer(t)
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", MachineID: "machine-1", ProductID: "other-product"}}
+	status, response := sendLicenseRequest(t, server, "/v1/licenses/activate", request)
+	if status != http.StatusForbidden || response.Error == nil || response.Error.Code != protocol.ErrorInvalidLicense {
+		t.Fatalf("status=%d response=%+v", status, response)
+	}
+}
+
 // TestDenyScenarioReturnsTypedLicenseError verifies explicit denial is not
 // represented as a transport outage.
 func TestDenyScenarioReturnsTypedLicenseError(t *testing.T) {

@@ -17,7 +17,8 @@ entitlement storage.
 - `license-adapter` remains the client-side Provider boundary.
 - deploy-infra owns container and local orchestration assets, not service logic.
 - PostgreSQL and Redis are not required for the default deterministic fixture
-  mode. Durable activation is a later Phase 4 capability.
+  mode. PostgreSQL is the durable activation backend when restart recovery is
+  being tested; Redis is not used as activation storage.
 
 ## Development Rules
 
@@ -48,5 +49,7 @@ POST /v1/licenses/deactivate
 ```
 
 The default service mode is explicitly non-production and uses an isolated
-in-memory scenario store. Container and CI integration are maintained by the
-workspace deployment layer after the service contract is complete.
+in-memory scenario store. Set `LICENSE_SERVICE_STORAGE_MODE=postgres`, a
+PostgreSQL DSN, and `LICENSE_SERVICE_KEY_PROTECTION_SECRET` to exercise the
+durable activation backend. Container and CI integration are maintained by the
+workspace deployment layer.
