@@ -129,6 +129,40 @@ func (request CreateRequest) Validate() error {
 	return nil
 }
 
+// DeactivateRequest contains the data needed to release one activation.
+type DeactivateRequest struct {
+	// IdempotencyKey identifies one logical deactivation operation.
+	IdempotencyKey string
+	// RequestFingerprint identifies the complete non-secret request payload.
+	RequestFingerprint string
+	// ActivationID identifies the record being released.
+	ActivationID string
+	// ExpectedRevision prevents an update based on stale state when non-zero.
+	ExpectedRevision int64
+	// At is the operation timestamp supplied by the service clock.
+	At time.Time
+}
+
+// Validate checks the deactivation operation contract.
+func (request DeactivateRequest) Validate() error {
+	for name, value := range map[string]string{
+		"idempotency_key":     request.IdempotencyKey,
+		"request_fingerprint": request.RequestFingerprint,
+		"activation_id":       request.ActivationID,
+	} {
+		if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value {
+			return fmt.Errorf("deactivation %s must be non-empty and trimmed", name)
+		}
+	}
+	if request.ExpectedRevision < 0 {
+		return errors.New("deactivation expected revision must not be negative")
+	}
+	if request.At.IsZero() {
+		return errors.New("deactivation timestamp is required")
+	}
+	return nil
+}
+
 // Record is the durable representation of one license activation binding.
 type Record struct {
 	// ID identifies the activation and remains stable across service restarts.
