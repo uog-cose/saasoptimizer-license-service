@@ -40,6 +40,7 @@ are:
 | `LICENSE_SERVICE_FAULT_STATUS` | `503` | HTTP status for unavailable scenarios |
 | `LICENSE_SERVICE_LICENSE_ID` | `dev-license-001` | Fixture license identifier |
 | `LICENSE_SERVICE_PRODUCT_ID` | `saasoptimizer` | Fixture product identifier |
+| `LICENSE_SERVICE_ENTITLEMENTS` | `optimization,multi-objective,optimizer.essabpro,optimizer.ga,optimizer.random-search` | Comma-separated capability IDs; append `=false` to deny one explicitly |
 | `LICENSE_SERVICE_STORAGE_MODE` | `memory` | `memory` for fixtures or `postgres` for durable activations |
 | `LICENSE_SERVICE_POSTGRES_URL` | empty | PostgreSQL DSN required in `postgres` mode |
 | `LICENSE_SERVICE_KEY_PROTECTION_SECRET` | empty | Secret of at least 16 bytes used to protect stored key references |
