@@ -36,6 +36,9 @@ const (
 	EnvProductID = "LICENSE_SERVICE_PRODUCT_ID"
 	// EnvFeatures configures comma-separated feature names.
 	EnvFeatures = "LICENSE_SERVICE_FEATURES"
+	// EnvEntitlements configures comma-separated capability decisions. A bare
+	// identifier enables it; identifier=false explicitly disables it.
+	EnvEntitlements = "LICENSE_SERVICE_ENTITLEMENTS"
 	// EnvMaxConcurrent configures the fixture concurrent capacity.
 	EnvMaxConcurrent = "LICENSE_SERVICE_MAX_CONCURRENT"
 	// EnvMaxActivations configures the fixture activation capacity.
@@ -106,6 +109,8 @@ type Config struct {
 	ExpiresAt time.Time
 	// Features contains the fixture feature names.
 	Features []string
+	// Entitlements contains the fixture capability decisions.
+	Entitlements []protocol.Entitlement
 	// Capacity contains the fixture execution limits.
 	Capacity protocol.Capacity
 	// StorageMode selects the activation persistence backend.
@@ -132,6 +137,7 @@ func DefaultConfig() Config {
 		LicenseID:               "dev-license-001",
 		ProductID:               "saasoptimizer",
 		Features:                []string{"optimization", "multi-objective"},
+		Entitlements:            defaultEntitlements(),
 		Capacity:                protocol.Capacity{MaxConcurrent: 2, MaxActivations: 4},
 		StorageMode:             StorageModeMemory,
 		Clock:                   time.Now,
@@ -169,6 +175,9 @@ func (config Config) Validate() error {
 	}
 	if config.Capacity.MaxConcurrent < 0 || config.Capacity.MaxActivations < 0 {
 		return fmt.Errorf("license fixture capacity must not be negative")
+	}
+	if _, err := normalizeEntitlements(config.Entitlements); err != nil {
+		return fmt.Errorf("license fixture entitlements: %w", err)
 	}
 	switch config.StorageMode {
 	case StorageModeMemory:
@@ -241,6 +250,13 @@ func LoadFromEnv() (Config, error) {
 	if raw := os.Getenv(EnvFeatures); raw != "" {
 		config.Features = splitList(raw)
 	}
+	if raw := os.Getenv(EnvEntitlements); raw != "" {
+		entitlements, err := parseEntitlements(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %w", EnvEntitlements, err)
+		}
+		config.Entitlements = entitlements
+	}
 	if raw := os.Getenv(EnvMaxConcurrent); raw != "" {
 		value, err := strconv.Atoi(raw)
 		if err != nil {
@@ -295,5 +311,80 @@ func (config Config) Grant(now time.Time) protocol.Grant {
 	case KindRevoked:
 		status = "revoked"
 	}
-	return protocol.Grant{LicenseID: config.LicenseID, Status: status, Product: config.ProductID, Features: append([]string(nil), config.Features...), Capacity: config.Capacity, ExpiresAt: expiresAt, ValidatedAt: now}
+	entitlements, _ := normalizeEntitlements(config.Entitlements)
+	return protocol.Grant{LicenseID: config.LicenseID, Status: status, Product: config.ProductID, Features: append([]string(nil), config.Features...), Entitlements: entitlements, Capacity: config.Capacity, ExpiresAt: expiresAt, ValidatedAt: now}
+}
+
+// defaultEntitlements returns the capabilities granted by the development
+// fixture so local discovery and task creation exercise the real policy path.
+func defaultEntitlements() []protocol.Entitlement {
+	return []protocol.Entitlement{
+		{ID: "multi-objective", Enabled: true},
+		{ID: "optimization", Enabled: true},
+		{ID: "optimizer.essabpro", Enabled: true},
+		{ID: "optimizer.ga", Enabled: true},
+		{ID: "optimizer.random-search", Enabled: true},
+	}
+}
+
+// parseEntitlements parses comma-separated capability decisions from an
+// environment variable without accepting ambiguous duplicate values.
+func parseEntitlements(raw string) ([]protocol.Entitlement, error) {
+	values := make([]protocol.Entitlement, 0)
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		id := item
+		enabled := true
+		if strings.Contains(item, "=") {
+			parts := strings.SplitN(item, "=", 2)
+			id = strings.TrimSpace(parts[0])
+			parsed, err := strconv.ParseBool(strings.TrimSpace(parts[1]))
+			if err != nil {
+				return nil, fmt.Errorf("entitlement %q has invalid enabled value", id)
+			}
+			enabled = parsed
+		}
+		if id == "" || id != strings.ToLower(id) || strings.TrimSpace(id) != id {
+			return nil, fmt.Errorf("entitlement ID %q must be lowercase and trimmed", id)
+		}
+		values = append(values, protocol.Entitlement{ID: id, Enabled: enabled})
+	}
+	return normalizeEntitlements(values)
+}
+
+// normalizeEntitlements returns sorted unique capability decisions and rejects
+// conflicting duplicates before a grant is exposed on the wire.
+func normalizeEntitlements(entitlements []protocol.Entitlement) ([]protocol.Entitlement, error) {
+	if len(entitlements) == 0 {
+		return nil, nil
+	}
+	values := make(map[string]bool, len(entitlements))
+	for _, entitlement := range entitlements {
+		id := strings.TrimSpace(entitlement.ID)
+		if id == "" || id != strings.ToLower(id) || id != entitlement.ID {
+			return nil, fmt.Errorf("entitlement ID %q must be lowercase and trimmed", entitlement.ID)
+		}
+		if previous, exists := values[id]; exists {
+			if previous != entitlement.Enabled {
+				return nil, fmt.Errorf("entitlement %q has conflicting duplicate decisions", id)
+			}
+			continue
+		}
+		values[id] = entitlement.Enabled
+	}
+	result := make([]protocol.Entitlement, 0, len(values))
+	for id, enabled := range values {
+		result = append(result, protocol.Entitlement{ID: id, Enabled: enabled})
+	}
+	// The small fixture list is sorted with a simple insertion pass to keep
+	// output deterministic without another dependency.
+	for index := 1; index < len(result); index++ {
+		for cursor := index; cursor > 0 && result[cursor].ID < result[cursor-1].ID; cursor-- {
+			result[cursor], result[cursor-1] = result[cursor-1], result[cursor]
+		}
+	}
+	return result, nil
 }

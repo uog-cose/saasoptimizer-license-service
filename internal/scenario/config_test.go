@@ -31,8 +31,22 @@ func TestScenarioGrantIsDeterministic(t *testing.T) {
 	}
 	first := config.Grant(now)
 	second := config.Grant(now)
-	if first.Status != "expired" || !first.ExpiresAt.Equal(second.ExpiresAt) || !first.ValidatedAt.Equal(second.ValidatedAt) {
+	if first.Status != "expired" || len(first.Entitlements) == 0 || !first.ExpiresAt.Equal(second.ExpiresAt) || !first.ValidatedAt.Equal(second.ValidatedAt) {
 		t.Fatalf("first=%+v second=%+v", first, second)
+	}
+}
+
+// TestLoadFromEnvParsesEntitlements verifies capability decisions are
+// configurable for allow and deny integration scenarios.
+func TestLoadFromEnvParsesEntitlements(t *testing.T) {
+	t.Setenv(EnvToken, "development-token")
+	t.Setenv(EnvEntitlements, "optimizer.ga,optimizer.random-search=false")
+	config, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Entitlements) != 2 || !config.Entitlements[0].Enabled || config.Entitlements[1].Enabled {
+		t.Fatalf("entitlements=%#v", config.Entitlements)
 	}
 }
 

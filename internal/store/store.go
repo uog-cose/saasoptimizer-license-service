@@ -58,6 +58,7 @@ func (store *MemoryStore) Config() scenario.Config {
 	defer store.mu.Unlock()
 	config := store.config
 	config.Features = append([]string(nil), store.config.Features...)
+	config.Entitlements = append([]protocol.Entitlement(nil), store.config.Entitlements...)
 	return config
 }
 
