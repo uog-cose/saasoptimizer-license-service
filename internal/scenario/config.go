@@ -40,6 +40,12 @@ const (
 	EnvMaxConcurrent = "LICENSE_SERVICE_MAX_CONCURRENT"
 	// EnvMaxActivations configures the fixture activation capacity.
 	EnvMaxActivations = "LICENSE_SERVICE_MAX_ACTIVATIONS"
+	// EnvStorageMode selects memory or PostgreSQL activation persistence.
+	EnvStorageMode = "LICENSE_SERVICE_STORAGE_MODE"
+	// EnvPostgresURL configures the PostgreSQL activation store connection.
+	EnvPostgresURL = "LICENSE_SERVICE_POSTGRES_URL"
+	// EnvKeyProtectionSecret configures the HMAC key used for license references.
+	EnvKeyProtectionSecret = "LICENSE_SERVICE_KEY_PROTECTION_SECRET"
 )
 
 // Kind identifies one deterministic service scenario.
@@ -62,6 +68,16 @@ const (
 	KindTimeout Kind = "timeout"
 	// KindProtocolMismatch returns an unsupported response protocol version.
 	KindProtocolMismatch Kind = "protocol_mismatch"
+)
+
+// StorageMode identifies the activation persistence backend.
+type StorageMode string
+
+const (
+	// StorageModeMemory keeps activation state in the process for fixtures.
+	StorageModeMemory StorageMode = "memory"
+	// StorageModePostgres persists activation state in PostgreSQL.
+	StorageModePostgres StorageMode = "postgres"
 )
 
 // Config contains all deterministic service and fixture settings.
@@ -92,6 +108,12 @@ type Config struct {
 	Features []string
 	// Capacity contains the fixture execution limits.
 	Capacity protocol.Capacity
+	// StorageMode selects the activation persistence backend.
+	StorageMode StorageMode
+	// PostgresURL configures the durable activation database.
+	PostgresURL string
+	// KeyProtectionSecret protects license-key references in durable storage.
+	KeyProtectionSecret string
 	// Clock supplies the current time for deterministic tests.
 	Clock func() time.Time
 }
@@ -111,6 +133,7 @@ func DefaultConfig() Config {
 		ProductID:               "saasoptimizer",
 		Features:                []string{"optimization", "multi-objective"},
 		Capacity:                protocol.Capacity{MaxConcurrent: 2, MaxActivations: 4},
+		StorageMode:             StorageModeMemory,
 		Clock:                   time.Now,
 	}
 }
@@ -146,6 +169,18 @@ func (config Config) Validate() error {
 	}
 	if config.Capacity.MaxConcurrent < 0 || config.Capacity.MaxActivations < 0 {
 		return fmt.Errorf("license fixture capacity must not be negative")
+	}
+	switch config.StorageMode {
+	case StorageModeMemory:
+	case StorageModePostgres:
+		if strings.TrimSpace(config.PostgresURL) == "" {
+			return fmt.Errorf("license service PostgreSQL URL is required")
+		}
+		if strings.TrimSpace(config.KeyProtectionSecret) != config.KeyProtectionSecret || len(config.KeyProtectionSecret) < 16 {
+			return fmt.Errorf("license key protection secret must contain at least 16 characters")
+		}
+	default:
+		return fmt.Errorf("unsupported license service storage mode %q", config.StorageMode)
 	}
 	if config.Clock == nil {
 		return fmt.Errorf("license service clock is required")
@@ -220,6 +255,11 @@ func LoadFromEnv() (Config, error) {
 		}
 		config.Capacity.MaxActivations = value
 	}
+	if raw := os.Getenv(EnvStorageMode); raw != "" {
+		config.StorageMode = StorageMode(strings.TrimSpace(raw))
+	}
+	config.PostgresURL = strings.TrimSpace(os.Getenv(EnvPostgresURL))
+	config.KeyProtectionSecret = os.Getenv(EnvKeyProtectionSecret)
 	if err := config.Validate(); err != nil {
 		return Config{}, err
 	}
