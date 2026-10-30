@@ -3,7 +3,9 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uog-cose/saasoptimizer-license-service/internal/activation"
+	"github.com/uog-cose/saasoptimizer-license-service/internal/keyref"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/protocol"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/scenario"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/store"
@@ -24,23 +28,51 @@ var errOperationNotReady = errors.New("license operation is not implemented")
 
 // Server exposes the deterministic License Service over HTTP.
 type Server struct {
-	config scenario.Config
-	store  *store.MemoryStore
-	logger *slog.Logger
+	config          scenario.Config
+	store           *store.MemoryStore
+	activationStore activation.Store
+	keyProtector    KeyProtector
+	logger          *slog.Logger
+}
+
+// KeyProtector converts a raw license key into a safe persistence reference.
+type KeyProtector interface {
+	// Protect returns a non-reversible reference without retaining the raw key.
+	Protect(string) (string, error)
 }
 
 // New creates an HTTP service with one isolated validated scenario store.
 func New(config scenario.Config, fixtureStore *store.MemoryStore, logger *slog.Logger) (*Server, error) {
+	return NewWithActivationStore(config, fixtureStore, activation.NewMemoryActivationStore(), nil, logger)
+}
+
+// NewWithActivationStore creates an HTTP service with an explicit activation
+// persistence backend and key protection boundary.
+func NewWithActivationStore(config scenario.Config, fixtureStore *store.MemoryStore, activationStore activation.Store, protector KeyProtector, logger *slog.Logger) (*Server, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
 	if fixtureStore == nil {
 		return nil, ErrStoreRequired
 	}
+	if activationStore == nil {
+		return nil, ErrActivationStoreRequired
+	}
+	if protector == nil {
+		var err error
+		secret := config.KeyProtectionSecret
+		if secret == "" {
+			secret = "development-only-key-protection-secret"
+		}
+		protector, err = keyref.NewProtector(secret)
+		if err != nil {
+			return nil, fmt.Errorf("create license key protector: %w", err)
+		}
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{config: config, store: fixtureStore, logger: logger}, nil
+	return &Server{config: config, store: fixtureStore, activationStore: activationStore, keyProtector: protector, logger: logger}, nil
 }
 
 // Handler returns the HTTP handler for health and License Service endpoints.
@@ -122,7 +154,7 @@ func (server *Server) handleOperation(expected protocol.Operation, writer http.R
 	if !server.waitForScenario(request.Context()) {
 		return
 	}
-	response, status, code, retryable, message := server.execute(envelope)
+	response, status, code, retryable, message := server.execute(request.Context(), envelope)
 	if code != "" {
 		respondError(server.responseVersion(), code, retryable, message, status)
 		return
@@ -175,7 +207,7 @@ func (server *Server) waitForScenario(ctx context.Context) bool {
 }
 
 // execute evaluates one validated request against the configured scenario.
-func (server *Server) execute(request protocol.Request) (protocol.Response, int, protocol.ErrorCode, bool, string) {
+func (server *Server) execute(ctx context.Context, request protocol.Request) (protocol.Response, int, protocol.ErrorCode, bool, string) {
 	base := protocol.Response{ProtocolVersion: server.responseVersion(), RequestID: request.RequestID, OperationID: request.OperationID}
 	if server.config.Scenario == scenario.KindUnavailable {
 		status := server.config.FaultStatus
@@ -202,15 +234,66 @@ func (server *Server) execute(request protocol.Request) (protocol.Response, int,
 		base.Grant = &grant
 		return base, http.StatusOK, "", false, ""
 	case protocol.OperationActivate:
-		activation, err := server.store.Activate(request.IdempotencyKey, *request.Activation)
-		if err != nil {
-			return base, storeErrorStatus(err), storeErrorCode(err), false, "activation request cannot be applied"
+		if request.Activation.ProductID != server.config.ProductID {
+			return base, http.StatusForbidden, protocol.ErrorInvalidLicense, false, "development license product is not authorized"
 		}
-		base.Activation = &activation
+		keyReference, err := server.keyProtector.Protect(request.Activation.LicenseKey)
+		if err != nil {
+			return base, http.StatusBadRequest, protocol.ErrorInvalidRequest, false, "activation key cannot be protected"
+		}
+		fingerprint, err := activationRequestFingerprint(*request.Activation, keyReference)
+		if err != nil {
+			return base, http.StatusInternalServerError, protocol.ErrorInternal, false, "activation request cannot be fingerprinted"
+		}
+		activationResult, created, err := server.activationStore.Create(ctx, activation.CreateRequest{
+			IdempotencyKey:     request.IdempotencyKey,
+			RequestFingerprint: fingerprint,
+			LicenseID:          server.config.LicenseID,
+			ProductID:          request.Activation.ProductID,
+			KeyReference:       keyReference,
+			Binding: activation.IdentityBinding{
+				AccountID: request.Activation.AccountID,
+				TenantID:  request.Activation.TenantID,
+				ProjectID: request.Activation.ProjectID,
+				UserID:    request.Activation.UserID,
+				ClientID:  request.Activation.ClientID,
+				MachineID: request.Activation.MachineID,
+			},
+			At: server.config.Clock().UTC(),
+		})
+		if err != nil {
+			return base, activationStoreErrorStatus(err), activationStoreErrorCode(err), false, "activation request cannot be applied"
+		}
+		grant := server.store.Grant()
+		base.Activation = &protocol.Activation{ActivationID: activationResult.ID, Grant: &grant, IsNew: created}
 		return base, http.StatusOK, "", false, ""
 	case protocol.OperationDeactivate:
-		if err := server.store.Deactivate(request.IdempotencyKey, *request.Deactivation); err != nil {
-			return base, storeErrorStatus(err), storeErrorCode(err), false, "deactivation request cannot be applied"
+		if request.Deactivation.LicenseID != server.config.LicenseID {
+			return base, http.StatusForbidden, protocol.ErrorInvalidLicense, false, "development license is not authorized"
+		}
+		activationID := request.Deactivation.ActivationID
+		if activationID == "" {
+			if request.Deactivation.UserID == "" {
+				base.Accepted = true
+				return base, http.StatusOK, "", false, ""
+			}
+			binding := activation.IdentityBinding{AccountID: request.Deactivation.AccountID, TenantID: request.Deactivation.TenantID, ProjectID: request.Deactivation.ProjectID, UserID: request.Deactivation.UserID, ClientID: request.Deactivation.ClientID, MachineID: request.Deactivation.MachineID}
+			record, found, err := server.activationStore.FindActive(ctx, request.Deactivation.LicenseID, server.config.ProductID, binding)
+			if err != nil {
+				return base, activationStoreErrorStatus(err), activationStoreErrorCode(err), false, "deactivation request cannot be applied"
+			}
+			if !found {
+				base.Accepted = true
+				return base, http.StatusOK, "", false, ""
+			}
+			activationID = record.ID
+		}
+		fingerprint, err := deactivationRequestFingerprint(*request.Deactivation, activationID)
+		if err != nil {
+			return base, http.StatusInternalServerError, protocol.ErrorInternal, false, "deactivation request cannot be fingerprinted"
+		}
+		if _, _, err := server.activationStore.Deactivate(ctx, activation.DeactivateRequest{IdempotencyKey: request.IdempotencyKey, RequestFingerprint: fingerprint, ActivationID: activationID, At: server.config.Clock().UTC()}); err != nil {
+			return base, activationStoreErrorStatus(err), activationStoreErrorCode(err), false, "deactivation request cannot be applied"
 		}
 		base.Accepted = true
 		return base, http.StatusOK, "", false, ""
@@ -239,6 +322,68 @@ func storeErrorStatus(err error) int {
 		return http.StatusForbidden
 	}
 	return http.StatusInternalServerError
+}
+
+// activationStoreErrorCode maps durable activation failures to protocol errors.
+func activationStoreErrorCode(err error) protocol.ErrorCode {
+	if errors.Is(err, activation.ErrIdempotencyConflict) || errors.Is(err, activation.ErrBindingConflict) || errors.Is(err, activation.ErrRevisionConflict) {
+		return protocol.ErrorConflict
+	}
+	if errors.Is(err, activation.ErrNotFound) {
+		return protocol.ErrorInvalidLicense
+	}
+	return protocol.ErrorInternal
+}
+
+// activationStoreErrorStatus maps durable activation failures to HTTP statuses.
+func activationStoreErrorStatus(err error) int {
+	if errors.Is(err, activation.ErrIdempotencyConflict) || errors.Is(err, activation.ErrBindingConflict) || errors.Is(err, activation.ErrRevisionConflict) {
+		return http.StatusConflict
+	}
+	if errors.Is(err, activation.ErrNotFound) {
+		return http.StatusForbidden
+	}
+	return http.StatusInternalServerError
+}
+
+// activationRequestFingerprint creates a non-secret digest for activation
+// idempotency and durable conflict detection.
+func activationRequestFingerprint(request protocol.ActivationRequest, keyReference string) (string, error) {
+	payload, err := json.Marshal(struct {
+		AccountID    string `json:"account_id"`
+		MachineID    string `json:"machine_id"`
+		UserID       string `json:"user_id"`
+		TenantID     string `json:"tenant_id"`
+		ProjectID    string `json:"project_id"`
+		ClientID     string `json:"client_id"`
+		ProductID    string `json:"product_id"`
+		KeyReference string `json:"key_reference"`
+	}{request.AccountID, request.MachineID, request.UserID, request.TenantID, request.ProjectID, request.ClientID, request.ProductID, keyReference})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+// deactivationRequestFingerprint creates a non-secret digest for deactivation
+// idempotency and durable conflict detection.
+func deactivationRequestFingerprint(request protocol.DeactivationRequest, activationID string) (string, error) {
+	payload, err := json.Marshal(struct {
+		AccountID    string `json:"account_id"`
+		LicenseID    string `json:"license_id"`
+		ActivationID string `json:"activation_id"`
+		TenantID     string `json:"tenant_id"`
+		ProjectID    string `json:"project_id"`
+		ClientID     string `json:"client_id"`
+		UserID       string `json:"user_id"`
+		MachineID    string `json:"machine_id"`
+	}{request.AccountID, request.LicenseID, activationID, request.TenantID, request.ProjectID, request.ClientID, request.UserID, request.MachineID})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 // writeJSON writes one bounded JSON response with a stable content type.
