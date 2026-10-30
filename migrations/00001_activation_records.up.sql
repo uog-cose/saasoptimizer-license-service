@@ -51,4 +51,3 @@ CREATE TABLE IF NOT EXISTS saasoptimizer_license_activation_operations (
 
 CREATE INDEX IF NOT EXISTS saasoptimizer_license_activation_operations_activation_idx
     ON saasoptimizer_license_activation_operations (activation_id, operation_type);
-
