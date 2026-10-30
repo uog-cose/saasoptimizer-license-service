@@ -17,6 +17,7 @@ import (
 
 	"github.com/uog-cose/saasoptimizer-license-service/internal/activation"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/keyref"
+	servicemetrics "github.com/uog-cose/saasoptimizer-license-service/internal/metrics"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/protocol"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/scenario"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/store"
@@ -33,6 +34,7 @@ type Server struct {
 	activationStore activation.Store
 	keyProtector    KeyProtector
 	logger          *slog.Logger
+	metrics         *servicemetrics.Registry
 }
 
 // KeyProtector converts a raw license key into a safe persistence reference.
@@ -72,7 +74,7 @@ func NewWithActivationStore(config scenario.Config, fixtureStore *store.MemorySt
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{config: config, store: fixtureStore, activationStore: activationStore, keyProtector: protector, logger: logger}, nil
+	return &Server{config: config, store: fixtureStore, activationStore: activationStore, keyProtector: protector, logger: logger, metrics: servicemetrics.NewRegistry()}, nil
 }
 
 // Handler returns the HTTP handler for health and License Service endpoints.
@@ -81,6 +83,7 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/health", server.handleHealth)
 	mux.HandleFunc("/v1/health/live", server.handleHealthLive)
 	mux.HandleFunc("/v1/health/ready", server.handleHealthReady)
+	mux.HandleFunc("/metrics", server.handleMetrics)
 	mux.HandleFunc("/v1/licenses/validate", func(writer http.ResponseWriter, request *http.Request) {
 		server.handleOperation(protocol.OperationValidate, writer, request)
 	})
@@ -94,6 +97,15 @@ func (server *Server) Handler() http.Handler {
 		server.handleOperation(protocol.OperationDeactivate, writer, request)
 	})
 	return mux
+}
+
+// handleMetrics exposes bounded License Service operation outcomes.
+func (server *Server) handleMetrics(writer http.ResponseWriter, request *http.Request) {
+	if server.metrics == nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "metrics unavailable"})
+		return
+	}
+	server.metrics.Handler().ServeHTTP(writer, request)
 }
 
 // handleHealth reports process readiness without requiring service credentials.
@@ -151,6 +163,9 @@ func (server *Server) handleOperation(expected protocol.Operation, writer http.R
 	requestID := strings.TrimSpace(request.Header.Get("X-Request-ID"))
 	operationID := strings.TrimSpace(request.Header.Get("X-Operation-ID"))
 	respondError := func(version string, code protocol.ErrorCode, retryable bool, message string, status int) {
+		if server.metrics != nil {
+			server.metrics.Record(string(expected), "error")
+		}
 		server.logRequest(string(expected), requestID, operationID, status, code)
 		writeProtocolError(writer, version, requestID, operationID, code, retryable, message, status)
 	}
@@ -195,6 +210,9 @@ func (server *Server) handleOperation(expected protocol.Operation, writer http.R
 		return
 	}
 	if !server.waitForScenario(request.Context()) {
+		if server.metrics != nil {
+			server.metrics.Record(string(expected), "canceled")
+		}
 		return
 	}
 	response, status, code, retryable, message := server.execute(request.Context(), envelope)
@@ -203,6 +221,9 @@ func (server *Server) handleOperation(expected protocol.Operation, writer http.R
 		return
 	}
 	server.logRequest(string(envelope.Operation), requestID, operationID, status, "")
+	if server.metrics != nil {
+		server.metrics.Record(string(envelope.Operation), "success")
+	}
 	writeJSON(writer, status, response)
 }
 

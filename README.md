@@ -51,6 +51,11 @@ Health is public for container orchestration:
 curl http://127.0.0.1:55154/v1/health
 ```
 
+The service also exposes `GET /metrics` in Prometheus text format. It records
+only bounded operation/outcome categories and never includes bearer tokens,
+license keys, request IDs, or identity values. Use the endpoint for service
+availability and scenario trends; use JSONL logs for request-level diagnosis.
+
 License operations require the configured bearer token. Memory-mode activation
 state is ephemeral and process-local. PostgreSQL mode applies the embedded
 activation migration and stores only protected key references, never raw

@@ -111,6 +111,20 @@ func TestHealthEndpointsSeparateLivenessAndReadiness(t *testing.T) {
 	}
 }
 
+// TestMetricsEndpointReportsBoundedLicenseOutcomes verifies operational exposure.
+func TestMetricsEndpointReportsBoundedLicenseOutcomes(t *testing.T) {
+	server := testHTTPServer(t)
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-metrics", OperationID: "operation-metrics", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	if status, _ := sendLicenseRequest(t, server, "/v1/licenses/validate", request); status != http.StatusOK {
+		t.Fatalf("validation status=%d", status)
+	}
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "saasoptimizer_license_requests_total") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 // TestLicenseEndpointRequiresAuthentication verifies service credentials are
 // required independently from public health checks.
 func TestLicenseEndpointRequiresAuthentication(t *testing.T) {
