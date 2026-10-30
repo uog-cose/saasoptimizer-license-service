@@ -79,6 +79,8 @@ func NewWithActivationStore(config scenario.Config, fixtureStore *store.MemorySt
 func (server *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", server.handleHealth)
+	mux.HandleFunc("/v1/health/live", server.handleHealthLive)
+	mux.HandleFunc("/v1/health/ready", server.handleHealthReady)
 	mux.HandleFunc("/v1/licenses/validate", func(writer http.ResponseWriter, request *http.Request) {
 		server.handleOperation(protocol.OperationValidate, writer, request)
 	})
@@ -100,7 +102,48 @@ func (server *Server) handleHealth(writer http.ResponseWriter, request *http.Req
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	writeJSON(writer, http.StatusOK, protocol.HealthResponse{Status: "ok", Service: "saasoptimizer-license-service", Environment: "development", ProtocolVersion: server.config.ResponseProtocolVersion})
+	writeJSON(writer, http.StatusOK, server.healthResponse("liveness", "ok"))
+}
+
+// handleHealthLive reports that the License Service process is alive.
+func (server *Server) handleHealthLive(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	writeJSON(writer, http.StatusOK, server.healthResponse("liveness", "ok"))
+}
+
+// handleHealthReady reports whether the activation store is available for work.
+func (server *Server) handleHealthReady(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	status := "ok"
+	dependencyStatus := "ok"
+	detail := ""
+	if server.activationStore == nil {
+		status = "not_ready"
+		dependencyStatus = "not_ready"
+		detail = "activation store unavailable"
+	}
+	response := server.healthResponse("readiness", status)
+	response.Dependencies = []protocol.HealthDependency{{Name: "activation-store", Status: dependencyStatus, Required: true, Detail: detail}}
+	writeJSON(writer, healthHTTPStatus(status), response)
+}
+
+// healthResponse creates the stable health payload shared by service endpoints.
+func (server *Server) healthResponse(checkType, status string) protocol.HealthResponse {
+	return protocol.HealthResponse{Status: status, Service: "saasoptimizer-license-service", Environment: "development", ProtocolVersion: server.config.ResponseProtocolVersion, CheckType: checkType}
+}
+
+// healthHTTPStatus maps readiness failure to the orchestrator status code.
+func healthHTTPStatus(status string) int {
+	if status == "starting" || status == "not_ready" || status == "failed" {
+		return http.StatusServiceUnavailable
+	}
+	return http.StatusOK
 }
 
 // handleOperation authenticates, decodes, and validates one License request.
