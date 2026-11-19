@@ -33,7 +33,7 @@ func New(pool *pgxpool.Pool) (*Store, error) {
 	return &Store{pool: pool}, nil
 }
 
-// Create creates or replays one activation in a serializable transaction.
+// Create creates or replays one activation with per-license capacity serialization.
 func (store *Store) Create(ctx context.Context, request activation.CreateRequest) (activation.Record, bool, error) {
 	ctx = normalizedContext(ctx)
 	if store == nil || store.pool == nil {
@@ -46,11 +46,16 @@ func (store *Store) Create(ctx context.Context, request activation.CreateRequest
 	if err != nil {
 		return activation.Record{}, false, err
 	}
-	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	// READ COMMITTED gives the capacity query a fresh snapshot after a caller
+	// waits for the per-license advisory lock.
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return activation.Record{}, false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, request.LicenseID); err != nil {
+		return activation.Record{}, false, err
+	}
 	operation, found, err := findOperation(ctx, tx, "activate", request.IdempotencyKey)
 	if err != nil {
 		return activation.Record{}, false, err
@@ -83,6 +88,19 @@ func (store *Store) Create(ctx context.Context, request activation.CreateRequest
 			return activation.Record{}, false, err
 		}
 		return existing, false, nil
+	}
+	if request.MaxActivations > 0 {
+		var activeCount int
+		if err := tx.QueryRow(ctx, `
+SELECT count(*)
+FROM `+activationTable+`
+WHERE license_id = $1 AND status = $2
+`, request.LicenseID, activation.StatusActive).Scan(&activeCount); err != nil {
+			return activation.Record{}, false, err
+		}
+		if activeCount >= request.MaxActivations {
+			return activation.Record{}, false, activation.ErrCapacityExceeded
+		}
 	}
 	id, err := newActivationID()
 	if err != nil {

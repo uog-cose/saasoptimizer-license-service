@@ -54,6 +54,42 @@ func TestMemoryStoreRejectsBindingConflict(t *testing.T) {
 	}
 }
 
+// TestMemoryStoreEnforcesActivationCapacityAndReleasesSeats verifies capacity
+// checks preserve idempotent replay and deactivation frees a machine seat.
+func TestMemoryStoreEnforcesActivationCapacityAndReleasesSeats(t *testing.T) {
+	store := NewMemoryActivationStore()
+	firstRequest := validCreateRequest()
+	firstRequest.MaxActivations = 1
+	first, created, err := store.Create(context.Background(), firstRequest)
+	if err != nil || !created {
+		t.Fatalf("first record=%+v created=%t error=%v", first, created, err)
+	}
+	if replay, created, err := store.Create(context.Background(), firstRequest); err != nil || created || replay.ID != first.ID {
+		t.Fatalf("replay=%+v created=%t error=%v", replay, created, err)
+	}
+
+	secondRequest := firstRequest
+	secondRequest.IdempotencyKey = "activation-operation-2"
+	secondRequest.RequestFingerprint = "request-fingerprint-2"
+	secondRequest.Binding.MachineID = "machine-2"
+	if _, _, err := store.Create(context.Background(), secondRequest); !errors.Is(err, ErrCapacityExceeded) {
+		t.Fatalf("error=%v, want ErrCapacityExceeded", err)
+	}
+
+	if _, _, err := store.Deactivate(context.Background(), DeactivateRequest{
+		IdempotencyKey:     "deactivation-operation-1",
+		RequestFingerprint: "deactivation-fingerprint-1",
+		ActivationID:       first.ID,
+		ExpectedRevision:   first.Revision,
+		At:                 firstRequest.At.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if record, created, err := store.Create(context.Background(), secondRequest); err != nil || !created || record.Binding.MachineID != "machine-2" {
+		t.Fatalf("record=%+v created=%t error=%v", record, created, err)
+	}
+}
+
 // TestMemoryStoreRejectsStaleDeactivate verifies revision checks are atomic.
 func TestMemoryStoreRejectsStaleDeactivate(t *testing.T) {
 	store := NewMemoryActivationStore()
