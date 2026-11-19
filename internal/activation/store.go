@@ -12,6 +12,8 @@ var (
 	ErrIdempotencyConflict = errors.New("activation idempotency conflict")
 	// ErrBindingConflict identifies an active binding that cannot be reused.
 	ErrBindingConflict = errors.New("active activation binding conflict")
+	// ErrCapacityExceeded identifies a license whose active machine bindings reached its limit.
+	ErrCapacityExceeded = errors.New("license activation capacity exceeded")
 	// ErrRevisionConflict identifies an update based on stale state.
 	ErrRevisionConflict = errors.New("activation revision conflict")
 )

@@ -315,6 +315,7 @@ func (server *Server) execute(ctx context.Context, request protocol.Request) (pr
 			LicenseID:          server.config.LicenseID,
 			ProductID:          request.Activation.ProductID,
 			KeyReference:       keyReference,
+			MaxActivations:     server.config.Capacity.MaxActivations,
 			Binding: activation.IdentityBinding{
 				AccountID: request.Activation.AccountID,
 				TenantID:  request.Activation.TenantID,
@@ -390,6 +391,9 @@ func storeErrorStatus(err error) int {
 
 // activationStoreErrorCode maps durable activation failures to protocol errors.
 func activationStoreErrorCode(err error) protocol.ErrorCode {
+	if errors.Is(err, activation.ErrCapacityExceeded) {
+		return protocol.ErrorQuotaExceeded
+	}
 	if errors.Is(err, activation.ErrIdempotencyConflict) || errors.Is(err, activation.ErrBindingConflict) || errors.Is(err, activation.ErrRevisionConflict) {
 		return protocol.ErrorConflict
 	}
@@ -401,6 +405,9 @@ func activationStoreErrorCode(err error) protocol.ErrorCode {
 
 // activationStoreErrorStatus maps durable activation failures to HTTP statuses.
 func activationStoreErrorStatus(err error) int {
+	if errors.Is(err, activation.ErrCapacityExceeded) {
+		return http.StatusForbidden
+	}
 	if errors.Is(err, activation.ErrIdempotencyConflict) || errors.Is(err, activation.ErrBindingConflict) || errors.Is(err, activation.ErrRevisionConflict) {
 		return http.StatusConflict
 	}

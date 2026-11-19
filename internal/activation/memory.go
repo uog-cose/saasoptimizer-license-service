@@ -70,6 +70,9 @@ func (store *MemoryStore) Create(ctx context.Context, request CreateRequest) (Re
 		store.operations[operationKey] = memoryOperation{fingerprint: request.RequestFingerprint, activation: record.ID}
 		return cloneRecord(record), false, nil
 	}
+	if request.MaxActivations > 0 && store.activeActivationCount(request.LicenseID) >= request.MaxActivations {
+		return Record{}, false, ErrCapacityExceeded
+	}
 	store.nextSequence++
 	record := Record{
 		ID:                 fmt.Sprintf("activation-%d", store.nextSequence),
@@ -90,6 +93,17 @@ func (store *MemoryStore) Create(ctx context.Context, request CreateRequest) (Re
 	store.activeBindings[bindingKey] = record.ID
 	store.operations[operationKey] = memoryOperation{fingerprint: request.RequestFingerprint, activation: record.ID}
 	return cloneRecord(record), true, nil
+}
+
+// activeActivationCount counts active bindings for one license while the caller holds the store lock.
+func (store *MemoryStore) activeActivationCount(licenseID string) int {
+	count := 0
+	for _, record := range store.records {
+		if record.LicenseID == licenseID && record.Status == StatusActive {
+			count++
+		}
+	}
+	return count
 }
 
 // Get returns one activation by stable identifier.

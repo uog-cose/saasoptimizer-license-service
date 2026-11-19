@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uog-cose/saasoptimizer-license-service/internal/activation"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/protocol"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/scenario"
 	"github.com/uog-cose/saasoptimizer-license-service/internal/store"
@@ -187,6 +188,36 @@ func TestActivationUsesStableDurableRecordSemantics(t *testing.T) {
 	status, second := sendLicenseRequest(t, server, "/v1/licenses/activate", request)
 	if status != http.StatusOK || second.Activation == nil || second.Activation.IsNew || second.Activation.ActivationID != first.Activation.ActivationID {
 		t.Fatalf("status=%d first=%+v second=%+v", status, first, second)
+	}
+}
+
+// TestActivationEnforcesConfiguredMachineCapacity verifies the HTTP activation
+// path returns a typed quota denial when a license has no remaining machine seats.
+func TestActivationEnforcesConfiguredMachineCapacity(t *testing.T) {
+	config := scenario.DefaultConfig()
+	config.AuthToken = "development-token"
+	config.Capacity.MaxActivations = 1
+	fixtureStore, err := store.NewMemoryStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewWithActivationStore(config, fixtureStore, activation.NewMemoryActivationStore(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRequest := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	status, first := sendLicenseRequest(t, server, "/v1/licenses/activate", firstRequest)
+	if status != http.StatusOK || first.Activation == nil || !first.Activation.IsNew {
+		t.Fatalf("status=%d response=%+v", status, first)
+	}
+	secondRequest := firstRequest
+	secondRequest.RequestID = "request-2"
+	secondRequest.OperationID = "operation-2"
+	secondRequest.IdempotencyKey = "activation-2"
+	secondRequest.Activation = &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", MachineID: "machine-2", ProductID: "saasoptimizer"}
+	status, denied := sendLicenseRequest(t, server, "/v1/licenses/activate", secondRequest)
+	if status != http.StatusForbidden || denied.Error == nil || denied.Error.Code != protocol.ErrorQuotaExceeded {
+		t.Fatalf("status=%d response=%+v", status, denied)
 	}
 }
 

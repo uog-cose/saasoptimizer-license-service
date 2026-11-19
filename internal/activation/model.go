@@ -97,6 +97,9 @@ type CreateRequest struct {
 	ProductID string
 	// KeyReference identifies protected license-key material without containing it.
 	KeyReference string
+	// MaxActivations limits active machine bindings for the license when positive.
+	// Zero leaves the number of active bindings unlimited.
+	MaxActivations int
 	// Binding contains the trusted ownership identity snapshot.
 	Binding IdentityBinding
 	// At is the operation timestamp supplied by the service clock.
@@ -107,6 +110,9 @@ type CreateRequest struct {
 func (request CreateRequest) Validate() error {
 	if strings.TrimSpace(request.IdempotencyKey) == "" || strings.TrimSpace(request.IdempotencyKey) != request.IdempotencyKey {
 		return errors.New("activation idempotency key must be non-empty and trimmed")
+	}
+	if request.MaxActivations < 0 {
+		return errors.New("activation limit must not be negative")
 	}
 	if strings.TrimSpace(request.RequestFingerprint) == "" || strings.TrimSpace(request.RequestFingerprint) != request.RequestFingerprint {
 		return errors.New("activation request fingerprint must be non-empty and trimmed")
