@@ -115,7 +115,7 @@ func TestHealthEndpointsSeparateLivenessAndReadiness(t *testing.T) {
 // TestMetricsEndpointReportsBoundedLicenseOutcomes verifies operational exposure.
 func TestMetricsEndpointReportsBoundedLicenseOutcomes(t *testing.T) {
 	server := testHTTPServer(t)
-	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-metrics", OperationID: "operation-metrics", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-metrics", OperationID: "operation-metrics", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
 	if status, _ := sendLicenseRequest(t, server, "/v1/licenses/validate", request); status != http.StatusOK {
 		t.Fatalf("validation status=%d", status)
 	}
@@ -162,12 +162,12 @@ func TestLicenseEndpointValidatesEnvelope(t *testing.T) {
 // operations return provider-compatible successful envelopes.
 func TestAllowScenarioServesValidationAndActivation(t *testing.T) {
 	server := testHTTPServer(t)
-	validate := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	validate := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
 	status, response := sendLicenseRequest(t, server, "/v1/licenses/validate", validate)
 	if status != http.StatusOK || response.Grant == nil || response.Grant.Status != "valid" {
 		t.Fatalf("status=%d response=%+v", status, response)
 	}
-	activate := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-2", OperationID: "operation-2", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	activate := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-2", OperationID: "operation-2", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
 	status, response = sendLicenseRequest(t, server, "/v1/licenses/activate", activate)
 	if status != http.StatusOK || response.Activation == nil || response.Activation.ActivationID == "" {
 		t.Fatalf("status=%d response=%+v", status, response)
@@ -178,7 +178,7 @@ func TestAllowScenarioServesValidationAndActivation(t *testing.T) {
 // reuse one activation ID while returning a replay result.
 func TestActivationUsesStableDurableRecordSemantics(t *testing.T) {
 	server := testHTTPServer(t)
-	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
 	status, first := sendLicenseRequest(t, server, "/v1/licenses/activate", request)
 	if status != http.StatusOK || first.Activation == nil || !first.Activation.IsNew {
 		t.Fatalf("status=%d response=%+v", status, first)
@@ -205,7 +205,7 @@ func TestActivationEnforcesConfiguredMachineCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstRequest := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	firstRequest := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
 	status, first := sendLicenseRequest(t, server, "/v1/licenses/activate", firstRequest)
 	if status != http.StatusOK || first.Activation == nil || !first.Activation.IsNew {
 		t.Fatalf("status=%d response=%+v", status, first)
@@ -214,7 +214,7 @@ func TestActivationEnforcesConfiguredMachineCapacity(t *testing.T) {
 	secondRequest.RequestID = "request-2"
 	secondRequest.OperationID = "operation-2"
 	secondRequest.IdempotencyKey = "activation-2"
-	secondRequest.Activation = &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", MachineID: "machine-2", ProductID: "saasoptimizer"}
+	secondRequest.Activation = &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", ClientID: "client-1", MachineID: "machine-2", ProductID: "saasoptimizer"}
 	status, denied := sendLicenseRequest(t, server, "/v1/licenses/activate", secondRequest)
 	if status != http.StatusForbidden || denied.Error == nil || denied.Error.Code != protocol.ErrorQuotaExceeded {
 		t.Fatalf("status=%d response=%+v", status, denied)
@@ -225,7 +225,7 @@ func TestActivationEnforcesConfiguredMachineCapacity(t *testing.T) {
 // configured license to another product.
 func TestActivationRejectsUnexpectedProduct(t *testing.T) {
 	server := testHTTPServer(t)
-	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", MachineID: "machine-1", ProductID: "other-product"}}
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "other-product"}}
 	status, response := sendLicenseRequest(t, server, "/v1/licenses/activate", request)
 	if status != http.StatusForbidden || response.Error == nil || response.Error.Code != protocol.ErrorInvalidLicense {
 		t.Fatalf("status=%d response=%+v", status, response)
@@ -236,7 +236,7 @@ func TestActivationRejectsUnexpectedProduct(t *testing.T) {
 // represented as a transport outage.
 func TestDenyScenarioReturnsTypedLicenseError(t *testing.T) {
 	server := newScenarioServer(t, scenario.KindDeny)
-	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
 	status, response := sendLicenseRequest(t, server, "/v1/licenses/validate", request)
 	if status != http.StatusForbidden || response.Error == nil || response.Error.Code != protocol.ErrorInvalidLicense || response.Error.Retryable {
 		t.Fatalf("status=%d response=%+v", status, response)
@@ -247,7 +247,7 @@ func TestDenyScenarioReturnsTypedLicenseError(t *testing.T) {
 // provider result rather than becoming an outage error.
 func TestExpiredScenarioReturnsExpiredGrant(t *testing.T) {
 	server := newScenarioServer(t, scenario.KindExpired)
-	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
 	status, response := sendLicenseRequest(t, server, "/v1/licenses/validate", request)
 	if status != http.StatusOK || response.Grant == nil || response.Grant.Status != "expired" {
 		t.Fatalf("status=%d response=%+v", status, response)
@@ -263,7 +263,7 @@ func TestRefreshAndDeactivateScenariosVerifyFullOperationSurface(t *testing.T) {
 	if status != http.StatusOK || response.Grant == nil || response.Grant.Capacity.MaxConcurrent != 2 {
 		t.Fatalf("refresh status=%d response=%+v", status, response)
 	}
-	deactivate := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-2", OperationID: "operation-2", IdempotencyKey: "deactivation-1", Operation: protocol.OperationDeactivate, Deactivation: &protocol.DeactivationRequest{LicenseID: "dev-license-001", MachineID: "machine-1"}}
+	deactivate := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-2", OperationID: "operation-2", IdempotencyKey: "deactivation-1", Operation: protocol.OperationDeactivate, Deactivation: &protocol.DeactivationRequest{LicenseID: "dev-license-001", ClientID: "client-1", MachineID: "machine-1"}}
 	status, response = sendLicenseRequest(t, server, "/v1/licenses/deactivate", deactivate)
 	if status != http.StatusOK || !response.Accepted {
 		t.Fatalf("deactivate status=%d response=%+v", status, response)
@@ -273,7 +273,7 @@ func TestRefreshAndDeactivateScenariosVerifyFullOperationSurface(t *testing.T) {
 // TestRevokedAndQuotaScenariosReturnTypedDenials verifies non-retryable
 // policy outcomes are distinguishable from provider outages.
 func TestRevokedAndQuotaScenariosReturnTypedDenials(t *testing.T) {
-	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
 	for _, testCase := range []struct {
 		name string
 		kind scenario.Kind
@@ -295,7 +295,7 @@ func TestRevokedAndQuotaScenariosReturnTypedDenials(t *testing.T) {
 // TestUnavailableScenarioIsRetryable verifies temporary outage classification.
 func TestUnavailableScenarioIsRetryable(t *testing.T) {
 	server := newScenarioServer(t, scenario.KindUnavailable)
-	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
 	status, response := sendLicenseRequest(t, server, "/v1/licenses/validate", request)
 	if status != http.StatusServiceUnavailable || response.Error == nil || response.Error.Code != protocol.ErrorUnavailable || !response.Error.Retryable {
 		t.Fatalf("status=%d response=%+v", status, response)
@@ -306,7 +306,7 @@ func TestUnavailableScenarioIsRetryable(t *testing.T) {
 // distinguish a compatibility failure from a valid service error response.
 func TestProtocolMismatchScenarioReturnsIncompatibleVersion(t *testing.T) {
 	server := newScenarioServer(t, scenario.KindProtocolMismatch)
-	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
 	status, response := sendLicenseRequest(t, server, "/v1/licenses/validate", request)
 	if status != http.StatusConflict || response.ProtocolVersion != "v0" || response.Error == nil || response.Error.Code != protocol.ErrorProtocolIncompatible {
 		t.Fatalf("status=%d response=%+v", status, response)
@@ -328,7 +328,7 @@ func TestTimeoutScenarioHonorsClientCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", Operation: protocol.OperationValidate, Subject: &protocol.Subject{UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
@@ -358,7 +358,7 @@ func TestServiceLogsDoNotContainSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "secret-license-key", UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	request := protocol.Request{ProtocolVersion: protocol.Version, RequestID: "request-1", OperationID: "operation-1", IdempotencyKey: "activation-1", Operation: protocol.OperationActivate, Activation: &protocol.ActivationRequest{LicenseKey: "secret-license-key", UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)

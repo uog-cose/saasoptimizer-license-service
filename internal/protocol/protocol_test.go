@@ -9,7 +9,7 @@ import (
 // TestRequestValidationRequiresSideEffectIdempotency verifies activation
 // requests cannot enter the service without a stable idempotency key.
 func TestRequestValidationRequiresSideEffectIdempotency(t *testing.T) {
-	request := Request{ProtocolVersion: Version, RequestID: "request-1", OperationID: "operation-1", Operation: OperationActivate, Activation: &ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
+	request := Request{ProtocolVersion: Version, RequestID: "request-1", OperationID: "operation-1", Operation: OperationActivate, Activation: &ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}}
 	if err := request.Validate(); err == nil {
 		t.Fatal("Validate() accepted activation without idempotency key")
 	}
@@ -45,5 +45,42 @@ func TestResponseValidationRejectsMixedPayload(t *testing.T) {
 	response := Response{ProtocolVersion: Version, RequestID: "request-1", OperationID: "operation-1", Grant: &Grant{LicenseID: "license-1", Status: "valid", Product: "saasoptimizer"}, Error: &Error{Code: ErrorInternal}}
 	if err := response.Validate(); !errors.Is(err, ErrInvalidResponse) {
 		t.Fatalf("Validate() error=%v, want ErrInvalidResponse", err)
+	}
+}
+
+// TestGrantRequiresExplicitEntitlements verifies omission is invalid while an
+// empty array remains a valid explicit denial of all optimizer access.
+func TestGrantRequiresExplicitEntitlements(t *testing.T) {
+	base := Grant{LicenseID: "license-1", Status: "valid", Product: "saasoptimizer"}
+	if err := base.Validate(); !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("Validate() error=%v, want missing entitlements rejected", err)
+	}
+	base.Entitlements = []Entitlement{}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("Validate() error=%v, want explicit empty entitlements accepted", err)
+	}
+	encoded, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if string(payload["entitlements"]) != "[]" {
+		t.Fatalf("entitlements JSON=%s, want []", payload["entitlements"])
+	}
+}
+
+// TestSubjectRequiresClientAndMachineBinding verifies the provider boundary
+// rejects incomplete Client/Machine activation identity.
+func TestSubjectRequiresClientAndMachineBinding(t *testing.T) {
+	subject := Subject{UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}
+	if err := subject.Validate(); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Validate() error=%v, want missing ClientID rejected", err)
+	}
+	subject.ClientID = "client-1"
+	if err := subject.Validate(); err != nil {
+		t.Fatalf("Validate() error=%v, want trusted Client/Machine identity accepted", err)
 	}
 }

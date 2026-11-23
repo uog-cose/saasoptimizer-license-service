@@ -50,6 +50,24 @@ func TestLoadFromEnvParsesEntitlements(t *testing.T) {
 	}
 }
 
+// TestLoadFromEnvPreservesExplicitEmptyEntitlements verifies an explicitly
+// empty setting produces a valid grant with access to no optimizers.
+func TestLoadFromEnvPreservesExplicitEmptyEntitlements(t *testing.T) {
+	t.Setenv(EnvToken, "development-token")
+	t.Setenv(EnvEntitlements, "")
+	config, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Entitlements == nil || len(config.Entitlements) != 0 {
+		t.Fatalf("entitlements=%#v, want explicit empty list", config.Entitlements)
+	}
+	grant := config.Grant(config.Clock())
+	if grant.Entitlements == nil || len(grant.Entitlements) != 0 {
+		t.Fatalf("grant entitlements=%#v, want explicit empty list", grant.Entitlements)
+	}
+}
+
 // TestLoadFromEnvParsesScenarioSettings verifies configuration can be driven
 // by the deployment environment without exposing token values in errors.
 func TestLoadFromEnvParsesScenarioSettings(t *testing.T) {

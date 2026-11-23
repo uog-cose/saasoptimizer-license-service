@@ -23,7 +23,7 @@ activation must survive a service restart.
 ## Local development
 
 ```bash
-go test ./...
+GOWORK=off go test ./...
 LICENSE_SERVICE_TOKEN=development-token go run ./cmd/license-service
 ```
 
@@ -40,7 +40,7 @@ are:
 | `LICENSE_SERVICE_FAULT_STATUS` | `503` | HTTP status for unavailable scenarios |
 | `LICENSE_SERVICE_LICENSE_ID` | `dev-license-001` | Fixture license identifier |
 | `LICENSE_SERVICE_PRODUCT_ID` | `saasoptimizer` | Fixture product identifier |
-| `LICENSE_SERVICE_ENTITLEMENTS` | `optimization,multi-objective,optimizer.essabpro,optimizer.ga,optimizer.random-search` | Comma-separated capability IDs; append `=false` to deny one explicitly |
+| `LICENSE_SERVICE_ENTITLEMENTS` | `optimization,multi-objective,optimizer.essabpro,optimizer.ga,optimizer.random-search` | Comma-separated capability IDs; an explicitly empty value grants no optimizers; append `=false` to deny one explicitly |
 | `LICENSE_SERVICE_STORAGE_MODE` | `memory` | `memory` for fixtures or `postgres` for durable activations |
 | `LICENSE_SERVICE_POSTGRES_URL` | empty | PostgreSQL DSN required in `postgres` mode |
 | `LICENSE_SERVICE_KEY_PROTECTION_SECRET` | empty | Secret of at least 16 bytes used to protect stored key references |
@@ -62,6 +62,12 @@ activation migration and stores only protected key references, never raw
 license keys. Keep the protection secret in the deployment secret store and
 reuse it across restarts. Do not use this development service for production
 licensing.
+
+Successful grants always include an `entitlements` array. `[]` means no
+optimizer is authorized; missing or `null` is an invalid provider response.
+Validation and activation require the Server-provided Client and Machine
+identifiers. The service applies its configured activation limit to those
+bindings; the Server does not use `max_concurrent` to limit simulation work.
 
 ## Container development
 
