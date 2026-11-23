@@ -27,6 +27,11 @@ entitlement storage.
 - Never log bearer tokens, license keys, or other secret material.
 - Inject time and scenario state so tests do not depend on wall-clock timing.
 - Preserve the v1 wire contract from Issue 175.
+- Every successful grant must include `entitlements`; `[]` means no optimizer
+  access, while a missing or `null` field is an invalid response. The service
+  must preserve this distinction through scenario configuration and JSON.
+- Validation, activation, and deactivation require trusted Client and Machine
+  identity; the Service enforces activation limits for each binding.
 
 ## Build and Test
 

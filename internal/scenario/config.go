@@ -250,7 +250,7 @@ func LoadFromEnv() (Config, error) {
 	if raw := os.Getenv(EnvFeatures); raw != "" {
 		config.Features = splitList(raw)
 	}
-	if raw := os.Getenv(EnvEntitlements); raw != "" {
+	if raw, exists := os.LookupEnv(EnvEntitlements); exists {
 		entitlements, err := parseEntitlements(raw)
 		if err != nil {
 			return Config{}, fmt.Errorf("%s: %w", EnvEntitlements, err)
@@ -359,7 +359,7 @@ func parseEntitlements(raw string) ([]protocol.Entitlement, error) {
 // conflicting duplicates before a grant is exposed on the wire.
 func normalizeEntitlements(entitlements []protocol.Entitlement) ([]protocol.Entitlement, error) {
 	if len(entitlements) == 0 {
-		return nil, nil
+		return []protocol.Entitlement{}, nil
 	}
 	values := make(map[string]bool, len(entitlements))
 	for _, entitlement := range entitlements {

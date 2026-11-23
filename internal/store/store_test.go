@@ -25,7 +25,7 @@ func testStore(t *testing.T) *MemoryStore {
 
 // testActivationRequest returns a valid fixture activation request.
 func testActivationRequest() protocol.ActivationRequest {
-	return protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", MachineID: "machine-1", ProductID: "saasoptimizer"}
+	return protocol.ActivationRequest{LicenseKey: "fixture-key", UserID: "user-1", ClientID: "client-1", MachineID: "machine-1", ProductID: "saasoptimizer"}
 }
 
 // TestMemoryStoreReplaysActivation verifies repeated requests reuse one result.
@@ -102,7 +102,7 @@ func TestMemoryStoreDeactivateIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := protocol.DeactivationRequest{LicenseID: "dev-license-001", ActivationID: activation.ActivationID, MachineID: "machine-1"}
+	request := protocol.DeactivationRequest{LicenseID: "dev-license-001", ActivationID: activation.ActivationID, ClientID: "client-1", MachineID: "machine-1"}
 	if err := store.Deactivate("close-1", request); err != nil {
 		t.Fatal(err)
 	}

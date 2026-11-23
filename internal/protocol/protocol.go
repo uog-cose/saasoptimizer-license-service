@@ -114,7 +114,7 @@ type Subject struct {
 
 // Validate checks the required and optional identity fields.
 func (subject Subject) Validate() error {
-	for name, value := range map[string]string{"user_id": subject.UserID, "machine_id": subject.MachineID, "product_id": subject.ProductID} {
+	for name, value := range map[string]string{"user_id": subject.UserID, "client_id": subject.ClientID, "machine_id": subject.MachineID, "product_id": subject.ProductID} {
 		if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value {
 			return fmt.Errorf("%w: subject %s is required and trimmed", ErrInvalidRequest, name)
 		}
@@ -154,7 +154,7 @@ type Grant struct {
 	// Features lists legacy feature names.
 	Features []string `json:"features,omitempty"`
 	// Entitlements lists capability decisions.
-	Entitlements []Entitlement `json:"entitlements,omitempty"`
+	Entitlements []Entitlement `json:"entitlements"`
 	// Capacity contains provider-reported limits.
 	Capacity Capacity `json:"capacity,omitempty"`
 	// ExpiresAt identifies the grant expiry time.
@@ -167,6 +167,9 @@ type Grant struct {
 func (grant Grant) Validate() error {
 	if strings.TrimSpace(grant.LicenseID) == "" || strings.TrimSpace(grant.Product) == "" || strings.TrimSpace(grant.Status) == "" {
 		return fmt.Errorf("%w: grant identity is incomplete", ErrInvalidResponse)
+	}
+	if grant.Entitlements == nil {
+		return fmt.Errorf("%w: grant entitlements field is required", ErrInvalidResponse)
 	}
 	if grant.Capacity.MaxConcurrent < 0 || grant.Capacity.MaxActivations < 0 {
 		return fmt.Errorf("%w: grant capacity must not be negative", ErrInvalidResponse)
@@ -237,7 +240,7 @@ type DeactivationRequest struct {
 
 // Validate checks deactivation references without exposing secret material.
 func (request DeactivationRequest) Validate() error {
-	for name, value := range map[string]string{"license_id": request.LicenseID, "machine_id": request.MachineID} {
+	for name, value := range map[string]string{"license_id": request.LicenseID, "client_id": request.ClientID, "machine_id": request.MachineID} {
 		if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value {
 			return fmt.Errorf("%w: deactivation %s is required and trimmed", ErrInvalidRequest, name)
 		}
